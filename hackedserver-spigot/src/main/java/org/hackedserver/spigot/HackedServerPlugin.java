@@ -12,6 +12,7 @@ import org.hackedserver.spigot.commands.CommandsManager;
 import org.hackedserver.spigot.hopper.HackedServerHopper;
 import org.hackedserver.spigot.listeners.HackedPlayerListeners;
 import org.hackedserver.spigot.listeners.LunarApolloListener;
+import org.hackedserver.spigot.probing.SignTranslationProber;
 import org.hackedserver.spigot.protocol.PacketEventsIntegration;
 import org.hackedserver.spigot.protocol.ProtocolLibIntegration;
 import org.hackedserver.spigot.utils.logs.Logs;
@@ -116,6 +117,9 @@ public class HackedServerPlugin extends JavaPlugin {
         }
 
         lunarApolloListener = new LunarApolloListener(this);
+
+        // Register sign translation probing (active mod detection)
+        Bukkit.getPluginManager().registerEvents(new SignTranslationProber(), this);
 
         // Try to load commands with CommandAPI (may not be available on all server types)
         try {
