@@ -25,6 +25,7 @@ public class HackedPlayer {
     private final Map<String, ForgeModInfo> forgeMods = new LinkedHashMap<>();
     private volatile boolean forgeModsKnown = false;
     private volatile ForgeClientType forgeClientType = null;
+    private volatile String brand = null;
     private volatile boolean bedrockDetected = false;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
 
@@ -88,6 +89,14 @@ public class HackedPlayer {
         synchronized (lunarMods) {
             return lunarMods.containsKey(modId.toLowerCase(Locale.ROOT));
         }
+    }
+
+    public void setBrand(String brand) {
+        this.brand = brand;
+    }
+
+    public String getBrand() {
+        return brand;
     }
 
     public void setForgeClientType(ForgeClientType clientType) {

@@ -108,6 +108,7 @@ public class CustomPayloadListener implements PacketListener {
     private void processForgePacket(Player player, HackedPlayer hackedPlayer, String channel, String message) {
         // Detect client type from minecraft:brand
         if (ForgeChannelParser.BRAND_CHANNEL.equalsIgnoreCase(channel)) {
+            hackedPlayer.setBrand(message);
             ForgeClientType clientType = ForgeChannelParser.parseClientType(message);
             if (clientType != null && hackedPlayer.getForgeClientType() == null) {
                 hackedPlayer.setForgeClientType(clientType);
@@ -125,6 +126,18 @@ public class CustomPayloadListener implements PacketListener {
                 ForgeHandshakeResult result = ForgeHandshakeProcessor.processMods(hackedPlayer, mods);
                 if (result.hasTriggers()) {
                     runForgeActions(result.getTriggers(), player.getUniqueId(), player.getUsername());
+                }
+            }
+
+            // Brand spoofing detection: vanilla brand + fabric channels = ServerSpoof
+            if (ForgeConfig.isSpoofingDetectionEnabled()
+                    && !hackedPlayer.hasGenericCheck("spoofed_brand")
+                    && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
+                    && ForgeChannelParser.containsFabricChannels(message)) {
+                hackedPlayer.addGenericCheck("spoofed_brand");
+                List<Action> actions = ForgeConfig.getSpoofingActions();
+                if (!actions.isEmpty()) {
+                    runActions(actions, player.getUniqueId(), player.getUsername(), "Spoofed Brand (Fabric)");
                 }
             }
         }

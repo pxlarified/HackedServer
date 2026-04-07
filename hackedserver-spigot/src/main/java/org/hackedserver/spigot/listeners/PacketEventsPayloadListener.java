@@ -125,6 +125,7 @@ public class PacketEventsPayloadListener extends PacketListenerAbstract {
     private void processForgePacket(UUID playerUuid, String playerName, HackedPlayer hackedPlayer, String channel, String message) {
         // Detect client type from minecraft:brand
         if (ForgeChannelParser.BRAND_CHANNEL.equalsIgnoreCase(channel)) {
+            hackedPlayer.setBrand(message);
             ForgeClientType clientType = ForgeChannelParser.parseClientType(message);
             if (clientType != null && hackedPlayer.getForgeClientType() == null) {
                 hackedPlayer.setForgeClientType(clientType);
@@ -142,6 +143,22 @@ public class PacketEventsPayloadListener extends PacketListenerAbstract {
                 ForgeHandshakeResult result = ForgeHandshakeProcessor.processMods(hackedPlayer, mods);
                 if (result.hasTriggers()) {
                     runForgeActions(result.getTriggers(), playerUuid, playerName);
+                }
+            }
+
+            // Brand spoofing detection: vanilla brand + fabric channels = ServerSpoof
+            if (ForgeConfig.isSpoofingDetectionEnabled()
+                    && !hackedPlayer.hasGenericCheck("spoofed_brand")
+                    && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
+                    && ForgeChannelParser.containsFabricChannels(message)) {
+                hackedPlayer.addGenericCheck("spoofed_brand");
+                List<Action> actions = ForgeConfig.getSpoofingActions();
+                if (!actions.isEmpty()) {
+                    for (Action action : actions) {
+                        performActions(action, playerUuid, playerName, "Spoofed Brand (Fabric)",
+                                Placeholder.unparsed("player", playerName),
+                                Placeholder.parsed("name", "Spoofed Brand (Fabric)"));
+                    }
                 }
             }
         }
