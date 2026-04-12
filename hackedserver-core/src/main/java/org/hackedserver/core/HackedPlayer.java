@@ -26,6 +26,7 @@ public class HackedPlayer {
     private volatile boolean forgeModsKnown = false;
     private volatile ForgeClientType forgeClientType = null;
     private volatile String brand = null;
+    private volatile boolean fabricChannelsDetected = false;
     private volatile boolean bedrockDetected = false;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
 
@@ -97,6 +98,14 @@ public class HackedPlayer {
 
     public String getBrand() {
         return brand;
+    }
+
+    public void setFabricChannelsDetected(boolean detected) {
+        this.fabricChannelsDetected = detected;
+    }
+
+    public boolean hasFabricChannelsDetected() {
+        return fabricChannelsDetected;
     }
 
     public void setForgeClientType(ForgeClientType clientType) {

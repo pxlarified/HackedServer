@@ -303,10 +303,19 @@ public class PacketSignProber {
         WrapperPlayClientUpdateSign updateSign = new WrapperPlayClientUpdateSign(event);
         UUID playerUUID = event.getUser().getUUID();
 
-        ProbeSession session = activeSessions.remove(playerUUID);
+        ProbeSession session = activeSessions.get(playerUUID);
         if (session == null || session.handled) {
             return;
         }
+
+        // Verify this UPDATE_SIGN is for the probe sign, not a legitimate sign edit
+        Vector3i signPos = updateSign.getBlockPosition();
+        if (!signPos.equals(session.signPosition)) {
+            return;
+        }
+
+        // Now consume the session
+        activeSessions.remove(playerUUID);
         session.handled = true;
 
         // Cancel the packet so the backend server doesn't try to process it

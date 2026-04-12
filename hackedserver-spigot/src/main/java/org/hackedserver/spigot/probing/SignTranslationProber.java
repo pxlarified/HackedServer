@@ -60,18 +60,21 @@ public class SignTranslationProber implements Listener {
     private static final class ProbeSession {
         private final Location signLocation;
         private final BlockData originalBlockData;
+        private final BlockState originalBlockState;
         private final List<TranslationCheck> lineChecks;
         private volatile boolean timedOut = false;
         private volatile boolean handled = false;
 
-        ProbeSession(Location signLocation, BlockData originalBlockData, List<TranslationCheck> lineChecks) {
+        ProbeSession(Location signLocation, BlockData originalBlockData, BlockState originalBlockState, List<TranslationCheck> lineChecks) {
             this.signLocation = signLocation;
             this.originalBlockData = originalBlockData;
+            this.originalBlockState = originalBlockState;
             this.lineChecks = lineChecks;
         }
 
         Location signLocation() { return signLocation; }
         BlockData originalBlockData() { return originalBlockData; }
+        BlockState originalBlockState() { return originalBlockState; }
         List<TranslationCheck> lineChecks() { return lineChecks; }
     }
 
@@ -173,6 +176,7 @@ public class SignTranslationProber implements Listener {
         Block block = signLoc.getBlock();
 
         BlockData originalData = block.getBlockData().clone();
+        BlockState originalState = block.getState();
 
         if (Config.DEBUG.toBool()) {
             Logs.logInfo("HackedServer | Starting sign probe for " + player.getName()
@@ -219,7 +223,7 @@ public class SignTranslationProber implements Listener {
 
             // Register the probe session
             activeSessions.put(player.getUniqueId(),
-                    new ProbeSession(signLoc, originalData, lineChecks));
+                    new ProbeSession(signLoc, originalData, originalState, lineChecks));
 
             // Open sign editor after a short delay to let the block update propagate
             Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
@@ -279,10 +283,22 @@ public class SignTranslationProber implements Listener {
         WrapperPlayClientUpdateSign updateSign = new WrapperPlayClientUpdateSign(event);
         UUID playerUUID = event.getUser().getUUID();
 
-        ProbeSession session = activeSessions.remove(playerUUID);
+        ProbeSession session = activeSessions.get(playerUUID);
         if (session == null || session.handled) {
             return;
         }
+
+        // Verify this UPDATE_SIGN is for the probe sign, not a legitimate sign edit
+        com.github.retrooper.packetevents.util.Vector3i signPos = updateSign.getBlockPosition();
+        Location probeLoc = session.signLocation();
+        if (signPos.x != probeLoc.getBlockX()
+                || signPos.y != probeLoc.getBlockY()
+                || signPos.z != probeLoc.getBlockZ()) {
+            return;
+        }
+
+        // Now consume the session
+        activeSessions.remove(playerUUID);
         session.handled = true;
 
         event.setCancelled(true);
@@ -340,6 +356,10 @@ public class SignTranslationProber implements Listener {
         try {
             Block block = session.signLocation().getBlock();
             block.setBlockData(session.originalBlockData(), false);
+            // Restore tile entity data (chest contents, sign text, etc.)
+            if (session.originalBlockState() != null) {
+                session.originalBlockState().update(true, false);
+            }
         } catch (Throwable e) {
             // Best effort
         }

@@ -101,6 +101,9 @@ public final class PayloadProcessor {
                     runForgeActions(result.getTriggers(), player);
                 }
             }
+
+            // Re-evaluate spoofing: brand arrived after register
+            checkBrandSpoofing(player, hackedPlayer);
         }
 
         // Detect mods from minecraft:register
@@ -113,16 +116,25 @@ public final class PayloadProcessor {
                 }
             }
 
+            // Track fabric channels for deferred spoofing check
+            if (ForgeChannelParser.containsFabricChannels(message)) {
+                hackedPlayer.setFabricChannelsDetected(true);
+            }
+
             // Brand spoofing detection: vanilla brand + fabric channels = ServerSpoof
-            if (ForgeConfig.isSpoofingDetectionEnabled()
-                    && !hackedPlayer.hasGenericCheck("spoofed_brand")
-                    && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
-                    && ForgeChannelParser.containsFabricChannels(message)) {
-                hackedPlayer.addGenericCheck("spoofed_brand");
-                List<Action> actions = ForgeConfig.getSpoofingActions();
-                if (!actions.isEmpty()) {
-                    runActions(player, "Spoofed Brand (Fabric)", actions);
-                }
+            checkBrandSpoofing(player, hackedPlayer);
+        }
+    }
+
+    private static void checkBrandSpoofing(Player player, HackedPlayer hackedPlayer) {
+        if (ForgeConfig.isSpoofingDetectionEnabled()
+                && !hackedPlayer.hasGenericCheck("spoofed_brand")
+                && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
+                && hackedPlayer.hasFabricChannelsDetected()) {
+            hackedPlayer.addGenericCheck("spoofed_brand");
+            List<Action> actions = ForgeConfig.getSpoofingActions();
+            if (!actions.isEmpty()) {
+                runActions(player, "Spoofed Brand (Fabric)", actions);
             }
         }
     }
