@@ -66,6 +66,22 @@ public class HackedServerPlugin extends JavaPlugin {
         // Check if ProtocolLib is available
         protocolLibAvailable = Bukkit.getPluginManager().getPlugin("ProtocolLib") != null;
 
+        // Re-check PacketEvents availability during onEnable() if not found during onLoad()
+        // Paper's new plugin system may not have loaded packetevents' classes during our onLoad()
+        if (!packetEventsAvailable) {
+            packetEventsAvailable = isPacketEventsPresent();
+            if (packetEventsAvailable) {
+                try {
+                    packetEventsIntegration = new PacketEventsIntegration(this);
+                    packetEventsIntegration.load();
+                } catch (Throwable e) {
+                    getLogger().warning("Failed to initialize PacketEvents: " + e.getMessage());
+                    packetEventsAvailable = false;
+                    packetEventsIntegration = null;
+                }
+            }
+        }
+
         // Determine which packet library to use
         // Prefer ProtocolLib on standard Paper/Spigot, use PacketEvents on hybrid servers like Arclight
         boolean useProtocolLib = protocolLibAvailable && !isHybridServer();
