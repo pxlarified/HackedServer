@@ -1,7 +1,12 @@
 package org.hackedserver.spigot.probing;
 
+import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.event.PacketListenerAbstract;
+import com.github.retrooper.packetevents.event.PacketListenerPriority;
+import com.github.retrooper.packetevents.event.PacketReceiveEvent;
+import com.github.retrooper.packetevents.protocol.packettype.PacketType;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientUpdateSign;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -20,6 +25,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.hackedserver.core.HackedPlayer;
 import org.hackedserver.core.HackedServer;
+import org.hackedserver.core.config.Config;
 import org.hackedserver.core.probing.ProbingConfig;
 import org.hackedserver.core.probing.TranslationCheck;
 import org.hackedserver.spigot.HackedServerPlugin;
@@ -34,26 +40,70 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Active probing via the sign translation vulnerability (MC-265322).
  * <p>
- * Places an invisible sign underground, writes translatable components on it,
- * opens the sign editor for the player, and reads back the resolved text.
- * If the client resolves a mod-specific translation key, the mod is detected.
+ * Places a real sign block in the world with translatable text components
+ * set via the Bukkit Sign API. The server natively serializes these into
+ * the correct NBT format in the BlockEntityData packet. The sign editor
+ * is opened via player.openSign(), and the client's response is intercepted
+ * at the packet level (UPDATE_SIGN) using PacketEvents.
  * <p>
- * Paper 1.20+ only (requires Sign API with Side support).
+ * When the client opens the sign editor, translatable text components are
+ * resolved to plain text. If a mod's translation key resolves to something
+ * other than the raw key, that mod is installed.
+ * <p>
+ * Requires PacketEvents 2.x on the server and Paper (for Adventure API).
  */
 public class SignTranslationProber implements Listener {
 
-    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
-
-    /**
-     * Tracks active probes: player UUID → probe session data.
-     */
     private final Map<UUID, ProbeSession> activeSessions = new ConcurrentHashMap<>();
+    private PacketListenerAbstract packetListener;
 
-    /**
-     * Stores which checks are assigned to which sign line for each probe.
-     */
-    private record ProbeSession(Location signLocation, BlockData originalBlockData,
-                                List<TranslationCheck> lineChecks) {
+    private static final class ProbeSession {
+        private final Location signLocation;
+        private final BlockData originalBlockData;
+        private final List<TranslationCheck> lineChecks;
+        private volatile boolean timedOut = false;
+        private volatile boolean handled = false;
+
+        ProbeSession(Location signLocation, BlockData originalBlockData, List<TranslationCheck> lineChecks) {
+            this.signLocation = signLocation;
+            this.originalBlockData = originalBlockData;
+            this.lineChecks = lineChecks;
+        }
+
+        Location signLocation() { return signLocation; }
+        BlockData originalBlockData() { return originalBlockData; }
+        List<TranslationCheck> lineChecks() { return lineChecks; }
+    }
+
+    public void register() {
+        packetListener = new PacketListenerAbstract(PacketListenerPriority.LOW) {
+            @Override
+            public void onPacketReceive(PacketReceiveEvent event) {
+                if (event.getPacketType() == PacketType.Play.Client.UPDATE_SIGN) {
+                    if (Config.DEBUG.toBool()) {
+                        WrapperPlayClientUpdateSign dbg = new WrapperPlayClientUpdateSign(event);
+                        UUID uid = event.getUser().getUUID();
+                        boolean hasSession = activeSessions.containsKey(uid);
+                        Logs.logInfo("HackedServer | Received UPDATE_SIGN packet from "
+                                + uid + " (hasSession=" + hasSession + ") lines: [\""
+                                + String.join("\", \"", dbg.getTextLines()) + "\"]");
+                    }
+                    handleUpdateSign(event);
+                }
+            }
+        };
+        PacketEvents.getAPI().getEventManager().registerListener(packetListener);
+    }
+
+    public void unregister() {
+        if (packetListener != null) {
+            PacketEvents.getAPI().getEventManager().unregisterListener(packetListener);
+            packetListener = null;
+        }
+        for (var entry : activeSessions.entrySet()) {
+            restoreBlock(entry.getValue());
+        }
+        activeSessions.clear();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -72,7 +122,11 @@ public class SignTranslationProber implements Listener {
             return;
         }
 
-        // Schedule the probe after the configured delay
+        if (Config.DEBUG.toBool()) {
+            Logs.logInfo("HackedServer | Scheduling sign probe for " + player.getName()
+                    + " with " + checks.size() + " checks (delay: " + ProbingConfig.getDelayTicks() + " ticks)");
+        }
+
         Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
             if (!player.isOnline()) {
                 return;
@@ -86,86 +140,88 @@ public class SignTranslationProber implements Listener {
         ProbeSession session = activeSessions.remove(event.getPlayer().getUniqueId());
         if (session != null) {
             restoreBlock(session);
+            if (Config.DEBUG.toBool()) {
+                Logs.logInfo("HackedServer | Cleaned up probe session for " + event.getPlayer().getName() + " (quit)");
+            }
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSignChange(SignChangeEvent event) {
         Player player = event.getPlayer();
-        ProbeSession session = activeSessions.remove(player.getUniqueId());
-        if (session == null) {
-            return;
-        }
-
-        // Cancel the event so the sign is never actually updated in the world
-        event.setCancelled(true);
-
-        // Restore the original block
-        restoreBlock(session);
-
-        // Analyze responses
-        HackedPlayer hackedPlayer = HackedServer.getPlayer(player.getUniqueId());
-
-        for (int i = 0; i < session.lineChecks.size(); i++) {
-            TranslationCheck check = session.lineChecks.get(i);
-            Component lineComponent = event.line(i);
-            String response = PLAIN.serialize(lineComponent).trim();
-            String expected = check.getExpectedVanillaResponse();
-
-            // If the response differs from what vanilla would return, the mod resolved the key
-            if (!response.isEmpty() && !response.equals(expected)) {
-                String probeCheckId = "probe_" + check.getId();
-                if (!hackedPlayer.hasGenericCheck(probeCheckId)) {
-                    hackedPlayer.addGenericCheck(probeCheckId);
-                    PayloadProcessor.runActions(player, check.getName(), check.getActions());
-                }
-            }
+        if (activeSessions.containsKey(player.getUniqueId())) {
+            event.setCancelled(true);
         }
     }
 
     private void startProbe(Player player, List<TranslationCheck> checks) {
-        // Only use up to 4 checks (4 sign lines)
         List<TranslationCheck> lineChecks = checks.size() > 4 ? checks.subList(0, 4) : checks;
 
         Location playerLoc = player.getLocation();
-        Location signLoc = playerLoc.clone().add(0, ProbingConfig.getSignOffsetY(), 0);
+        int signX = playerLoc.getBlockX();
+        int signY = playerLoc.getBlockY() + ProbingConfig.getSignOffsetY();
+        int signZ = playerLoc.getBlockZ();
 
-        // Clamp Y to valid range
-        int minY = signLoc.getWorld().getMinHeight();
-        if (signLoc.getBlockY() < minY) {
-            signLoc.setY(minY);
+        if (playerLoc.getWorld() != null) {
+            int minY = playerLoc.getWorld().getMinHeight();
+            if (signY < minY) {
+                signY = minY;
+            }
         }
 
+        Location signLoc = new Location(playerLoc.getWorld(), signX, signY, signZ);
         Block block = signLoc.getBlock();
-        BlockData originalData = block.getBlockData();
+
+        BlockData originalData = block.getBlockData().clone();
+
+        if (Config.DEBUG.toBool()) {
+            Logs.logInfo("HackedServer | Starting sign probe for " + player.getName()
+                    + " at " + signX + ", " + signY + ", " + signZ);
+        }
+
+        // Place sign block (don't apply physics to avoid breaking it)
+        block.setType(Material.OAK_SIGN, false);
 
         try {
-            // Place sign block
-            block.setType(Material.OAK_SIGN, false);
             BlockState state = block.getState();
             if (!(state instanceof Sign sign)) {
-                // Shouldn't happen, but restore if it does
+                Logs.logWarning("HackedServer | Block at probe location is not a sign for " + player.getName());
                 block.setBlockData(originalData, false);
                 return;
             }
 
-            // Write translation checks on the back side (less visible)
-            Side side = Side.BACK;
-            SignSide signSide = sign.getSide(side);
+            // Set translatable text components on the sign using the Bukkit/Adventure API.
+            // The server will natively serialize these into the correct JSON format
+            // in the BlockEntityData packet sent to the client.
+            SignSide frontSide = sign.getSide(Side.FRONT);
+            for (int i = 0; i < 4; i++) {
+                if (i < lineChecks.size()) {
+                    TranslationCheck check = lineChecks.get(i);
+                    Component line;
+                    if (check.isBypassProtection()) {
+                        // Wrap in %s substitution to bypass Meteor's sign translation mixin
+                        line = Component.translatable("%s", Component.translatable(check.getTranslationKey()));
+                    } else {
+                        line = Component.translatable(check.getTranslationKey());
+                    }
+                    frontSide.line(i, line);
 
-            for (int i = 0; i < lineChecks.size(); i++) {
-                TranslationCheck check = lineChecks.get(i);
-                Component component = buildTranslationComponent(check);
-                signSide.line(i, component);
+                    if (Config.DEBUG.toBool()) {
+                        Logs.logInfo("HackedServer | Set sign line " + i + " to translatable: " + check.getTranslationKey()
+                                + " (bypass=" + check.isBypassProtection() + ")");
+                    }
+                } else {
+                    frontSide.line(i, Component.empty());
+                }
             }
-
+            sign.setWaxed(false);
             sign.update(true, false);
 
-            // Store session
+            // Register the probe session
             activeSessions.put(player.getUniqueId(),
-                    new ProbeSession(signLoc.clone(), originalData, lineChecks));
+                    new ProbeSession(signLoc, originalData, lineChecks));
 
-            // Open sign editor after a short delay (client needs to receive block data first)
+            // Open sign editor after a short delay to let the block update propagate
             Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
                 if (!player.isOnline()) {
                     ProbeSession s = activeSessions.remove(player.getUniqueId());
@@ -173,55 +229,120 @@ public class SignTranslationProber implements Listener {
                     return;
                 }
 
-                try {
-                    player.openSign(sign, side);
-                } catch (Throwable e) {
-                    Logs.logWarning("Failed to open sign editor for probe: " + e.getMessage());
+                BlockState currentState = block.getState();
+                if (!(currentState instanceof Sign currentSign)) {
+                    Logs.logWarning("HackedServer | Sign disappeared before editor opened for " + player.getName());
                     ProbeSession s = activeSessions.remove(player.getUniqueId());
                     if (s != null) restoreBlock(s);
                     return;
                 }
 
-                // Schedule cleanup in case the client never responds
+                player.openSign(currentSign, Side.FRONT);
+
+                if (Config.DEBUG.toBool()) {
+                    Logs.logInfo("HackedServer | Opened sign editor for " + player.getName());
+                }
+
+                // Timeout: restore block but keep session for late packet arrivals
                 Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
-                    ProbeSession s = activeSessions.remove(player.getUniqueId());
-                    if (s != null) {
+                    ProbeSession s = activeSessions.get(player.getUniqueId());
+                    if (s != null && !s.handled) {
+                        s.timedOut = true;
+                        if (Config.DEBUG.toBool()) {
+                            Logs.logInfo("HackedServer | Sign probe timed out for " + player.getName() + " (waiting for late packet)");
+                        }
                         restoreBlock(s);
                     }
-                }, 100L); // 5 second timeout
+                }, 400L); // 20 second timeout
+
+                // Final cleanup: remove session after grace period for late packets
+                Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
+                    ProbeSession s = activeSessions.remove(player.getUniqueId());
+                    if (s != null && !s.handled) {
+                        if (Config.DEBUG.toBool()) {
+                            Logs.logInfo("HackedServer | Sign probe final cleanup for " + player.getName());
+                        }
+                        restoreBlock(s);
+                    }
+                }, 440L); // 2 second grace period after timeout
             }, 5L);
 
         } catch (Throwable e) {
             Logs.logWarning("Failed to start translation probe: " + e.getMessage());
-            block.setBlockData(originalData, false);
+            ProbeSession s = activeSessions.remove(player.getUniqueId());
+            if (s != null) restoreBlock(s);
+            else block.setBlockData(originalData, false);
         }
     }
 
-    /**
-     * Builds the Adventure component for a translation check.
-     * <p>
-     * With bypass_protection: uses %s substitution to wrap the key,
-     * evading client-side mixins that strip known mod keys from signs.
-     * Without: uses a plain translatable component.
-     */
-    private Component buildTranslationComponent(TranslationCheck check) {
-        if (check.isBypassProtection()) {
-            // Wrap in %s to bypass sign translation protection mixins
-            // The outer key "%s" doesn't contain the mod name, so protection doesn't trigger
-            return Component.translatable("%s", Component.translatable(check.getTranslationKey()));
-        } else {
-            return Component.translatable(check.getTranslationKey());
+    private void handleUpdateSign(PacketReceiveEvent event) {
+        WrapperPlayClientUpdateSign updateSign = new WrapperPlayClientUpdateSign(event);
+        UUID playerUUID = event.getUser().getUUID();
+
+        ProbeSession session = activeSessions.remove(playerUUID);
+        if (session == null || session.handled) {
+            return;
         }
+        session.handled = true;
+
+        event.setCancelled(true);
+
+        String[] lines = updateSign.getTextLines();
+
+        if (Config.DEBUG.toBool()) {
+            Player player = Bukkit.getPlayer(playerUUID);
+            String playerName = player != null ? player.getName() : playerUUID.toString();
+            Logs.logInfo("HackedServer | Sign probe response from " + playerName
+                    + ": [\"" + String.join("\", \"", lines) + "\"]");
+        }
+
+        Bukkit.getScheduler().runTask(HackedServerPlugin.get(), () -> {
+            if (!session.timedOut) {
+                restoreBlock(session);
+            }
+
+            Player onlinePlayer = Bukkit.getPlayer(playerUUID);
+            if (onlinePlayer == null || !onlinePlayer.isOnline()) {
+                return;
+            }
+
+            HackedPlayer hackedPlayer = HackedServer.getPlayer(playerUUID);
+            if (hackedPlayer == null) {
+                return;
+            }
+
+            for (int i = 0; i < session.lineChecks().size() && i < lines.length; i++) {
+                TranslationCheck check = session.lineChecks().get(i);
+                String response = lines[i] != null ? lines[i].trim() : "";
+                String expected = check.getExpectedVanillaResponse();
+
+                if (Config.DEBUG.toBool()) {
+                    Logs.logInfo("HackedServer | Probe line " + i + " (" + check.getName()
+                            + "): response=\"" + response + "\", expected=\"" + expected + "\"");
+                }
+
+                if (!response.isEmpty() && !response.equals(expected)) {
+                    if (Config.DEBUG.toBool()) {
+                        Logs.logInfo("HackedServer | DETECTED: " + check.getName()
+                                + " via sign translation probe");
+                    }
+                    String probeCheckId = "probe_" + check.getId();
+                    if (!hackedPlayer.hasGenericCheck(probeCheckId)) {
+                        hackedPlayer.addGenericCheck(probeCheckId);
+                        PayloadProcessor.runActions(onlinePlayer, check.getName(), check.getActions());
+                    }
+                }
+            }
+        });
     }
 
     private void restoreBlock(ProbeSession session) {
         try {
-            Location loc = session.signLocation;
-            if (loc.getWorld() != null && loc.isChunkLoaded()) {
-                loc.getBlock().setBlockData(session.originalBlockData, false);
-            }
+            Block block = session.signLocation().getBlock();
+            block.setBlockData(session.originalBlockData(), false);
         } catch (Throwable e) {
-            Logs.logWarning("Failed to restore block after probe: " + e.getMessage());
+            // Best effort
         }
     }
+
 }

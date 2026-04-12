@@ -1,5 +1,7 @@
 package org.hackedserver.bungee.listeners;
 
+import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.protocol.player.User;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.md_5.bungee.api.ProxyServer;
@@ -16,6 +18,7 @@ import org.hackedserver.core.HackedServer;
 import org.hackedserver.core.bedrock.BedrockDetector;
 import org.hackedserver.core.config.Action;
 import org.hackedserver.core.config.BedrockConfig;
+import org.hackedserver.core.probing.PacketSignProber;
 
 import org.hackedserver.core.utils.JoinWebhook;
 
@@ -24,6 +27,11 @@ import java.util.concurrent.TimeUnit;
 public class HackedPlayerListeners implements Listener {
 
     private static final long JOIN_WEBHOOK_DELAY_SECONDS = 1L;
+    private final PacketSignProber signProber;
+
+    public HackedPlayerListeners(PacketSignProber signProber) {
+        this.signProber = signProber;
+    }
 
     @EventHandler
     public void onPlayerJoin(LoginEvent event) {
@@ -34,7 +42,7 @@ public class HackedPlayerListeners implements Listener {
     public void onPostLogin(PostLoginEvent event) {
         ProxiedPlayer player = event.getPlayer();
         HackedPlayer hackedPlayer = HackedServer.getPlayer(player.getUniqueId());
-        
+
         ProxyServer.getInstance().getScheduler().schedule(HackedServerPlugin.get(), () -> {
             JoinWebhook.send(player.getName(), player.getUniqueId());
         }, JOIN_WEBHOOK_DELAY_SECONDS, TimeUnit.SECONDS);
@@ -43,10 +51,21 @@ public class HackedPlayerListeners implements Listener {
             hackedPlayer.executePendingActions();
         }
         handleBedrockDetection(player, hackedPlayer);
+
+        // Start sign translation probe if enabled
+        if (signProber != null && !player.hasPermission("hackedserver.bypass")) {
+            User user = PacketEvents.getAPI().getPlayerManager().getUser(player);
+            if (user != null) {
+                signProber.startProbe(user, player.getName());
+            }
+        }
     }
 
     @EventHandler
     public void onPlayerLeave(PlayerDisconnectEvent event) {
+        if (signProber != null) {
+            signProber.onPlayerDisconnect(event.getPlayer().getUniqueId());
+        }
         HackedServer.removePlayer(event.getPlayer().getUniqueId());
     }
 

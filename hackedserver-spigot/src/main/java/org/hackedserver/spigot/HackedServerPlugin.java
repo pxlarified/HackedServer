@@ -30,6 +30,8 @@ public class HackedServerPlugin extends JavaPlugin {
     private PacketEventsIntegration packetEventsIntegration;
     @Nullable
     private LunarApolloListener lunarApolloListener;
+    @Nullable
+    private SignTranslationProber signTranslationProber;
 
     public HackedServerPlugin() throws NoSuchFieldException, IllegalAccessException {
         instance = this;
@@ -118,8 +120,15 @@ public class HackedServerPlugin extends JavaPlugin {
 
         lunarApolloListener = new LunarApolloListener(this);
 
-        // Register sign translation probing (active mod detection)
-        Bukkit.getPluginManager().registerEvents(new SignTranslationProber(), this);
+        // Register sign translation probing (active mod detection via packets)
+        if (packetEventsAvailable) {
+            signTranslationProber = new SignTranslationProber();
+            Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
+            signTranslationProber.register();
+            getLogger().info("Sign translation probing enabled (PacketEvents)");
+        } else {
+            getLogger().warning("Sign translation probing requires PacketEvents - disabled");
+        }
 
         // Try to load commands with CommandAPI (may not be available on all server types)
         try {
@@ -145,6 +154,9 @@ public class HackedServerPlugin extends JavaPlugin {
         }
         if (lunarApolloListener != null) {
             lunarApolloListener.unregister();
+        }
+        if (signTranslationProber != null) {
+            signTranslationProber.unregister();
         }
         HackedServer.clear();
     }
