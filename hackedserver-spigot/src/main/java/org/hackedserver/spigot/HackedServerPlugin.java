@@ -139,13 +139,18 @@ public class HackedServerPlugin extends JavaPlugin {
 
         // Register sign translation probing (active mod detection via packets)
         // Only register when PacketEvents is actually initialized (usePacketEvents or standalone plugin)
+        // SignTranslationProber uses 1.20+ sign APIs (Side, SignSide, Player#openSign)
         boolean packetEventsInitialized = usePacketEvents
                 || Bukkit.getPluginManager().getPlugin("packetevents") != null;
         if (packetEventsAvailable && packetEventsInitialized) {
-            signTranslationProber = new SignTranslationProber();
-            Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
-            signTranslationProber.register();
-            getLogger().info("Sign translation probing enabled (PacketEvents)");
+            if (isSignApiAvailable()) {
+                signTranslationProber = new SignTranslationProber();
+                Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
+                signTranslationProber.register();
+                getLogger().info("Sign translation probing enabled (PacketEvents)");
+            } else {
+                getLogger().info("Sign translation probing requires 1.20+ server APIs - disabled on this version");
+            }
         } else if (!packetEventsAvailable) {
             getLogger().warning("Sign translation probing requires PacketEvents - disabled");
         }
@@ -199,6 +204,19 @@ public class HackedServerPlugin extends JavaPlugin {
         // Also check if the PacketEvents classes are available (could be shaded)
         try {
             Class.forName("com.github.retrooper.packetevents.PacketEvents");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Check if the 1.20+ sign API (Side, SignSide, Player#openSign) is available.
+     * These classes were added in Bukkit 1.20 and are required by SignTranslationProber.
+     */
+    private boolean isSignApiAvailable() {
+        try {
+            Class.forName("org.bukkit.block.sign.Side");
             return true;
         } catch (ClassNotFoundException e) {
             return false;
