@@ -37,6 +37,14 @@ public class HackedServerPlugin extends Plugin {
         BedrockDetector.initialize(getLogger());
 
         // Initialize PacketEvents for sign translation probing
+        try {
+            Class.forName("com.github.retrooper.packetevents.PacketEvents");
+        } catch (ClassNotFoundException e) {
+            getLogger().severe("PacketEvents is required but not installed! HackedServer will not function.");
+            getLogger().severe("Please install PacketEvents on your BungeeCord proxy.");
+            return;
+        }
+
         PacketEvents.setAPI(BungeePacketEventsBuilder.build(this));
         PacketEvents.getAPI().load();
 
