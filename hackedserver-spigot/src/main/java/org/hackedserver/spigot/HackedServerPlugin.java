@@ -137,12 +137,15 @@ public class HackedServerPlugin extends JavaPlugin {
         lunarApolloListener = new LunarApolloListener(this);
 
         // Register sign translation probing (active mod detection via packets)
-        if (packetEventsAvailable) {
+        // Only register when PacketEvents is actually initialized (usePacketEvents or standalone plugin)
+        boolean packetEventsInitialized = usePacketEvents
+                || Bukkit.getPluginManager().getPlugin("packetevents") != null;
+        if (packetEventsAvailable && packetEventsInitialized) {
             signTranslationProber = new SignTranslationProber();
             Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
             signTranslationProber.register();
             getLogger().info("Sign translation probing enabled (PacketEvents)");
-        } else {
+        } else if (!packetEventsAvailable) {
             getLogger().warning("Sign translation probing requires PacketEvents - disabled");
         }
 

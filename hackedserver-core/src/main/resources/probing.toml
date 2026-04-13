@@ -1,5 +1,5 @@
 # Active probing via sign translation vulnerability (MC-265322)
-# Only works on Paper/Spigot servers (requires world access)
+# Works on Paper/Spigot (real sign blocks) and BungeeCord/Velocity (fake client-side packets).
 # Detects mods by exploiting client-side translation key resolution in sign editors
 enabled = true
 
@@ -7,6 +7,7 @@ enabled = true
 # Delay in ticks after player join before probing (20 ticks = 1 second)
 delay_ticks = 40
 # Y offset from player position for sign placement (negative = below)
+# Only applies to Paper/Spigot; proxy platforms use a fixed position near the player.
 sign_offset_y = -5
 
 # Translation checks - each entry detects a specific mod

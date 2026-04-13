@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Active probing via the sign translation vulnerability (MC-265322).
@@ -63,7 +64,7 @@ public class SignTranslationProber implements Listener {
         private final BlockState originalBlockState;
         private final List<TranslationCheck> lineChecks;
         private volatile boolean timedOut = false;
-        private volatile boolean handled = false;
+        private final AtomicBoolean handled = new AtomicBoolean(false);
 
         ProbeSession(Location signLocation, BlockData originalBlockData, BlockState originalBlockState, List<TranslationCheck> lineChecks) {
             this.signLocation = signLocation;
@@ -152,8 +153,15 @@ public class SignTranslationProber implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSignChange(SignChangeEvent event) {
         Player player = event.getPlayer();
-        if (activeSessions.containsKey(player.getUniqueId())) {
-            event.setCancelled(true);
+        ProbeSession session = activeSessions.get(player.getUniqueId());
+        if (session != null) {
+            Location probeLoc = session.signLocation();
+            Location signLoc = event.getBlock().getLocation();
+            if (signLoc.getBlockX() == probeLoc.getBlockX()
+                    && signLoc.getBlockY() == probeLoc.getBlockY()
+                    && signLoc.getBlockZ() == probeLoc.getBlockZ()) {
+                event.setCancelled(true);
+            }
         }
     }
 
@@ -250,7 +258,7 @@ public class SignTranslationProber implements Listener {
                 // Timeout: restore block but keep session for late packet arrivals
                 Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
                     ProbeSession s = activeSessions.get(player.getUniqueId());
-                    if (s != null && !s.handled) {
+                    if (s != null && !s.handled.get()) {
                         s.timedOut = true;
                         if (Config.DEBUG.toBool()) {
                             Logs.logInfo("HackedServer | Sign probe timed out for " + player.getName() + " (waiting for late packet)");
@@ -262,7 +270,7 @@ public class SignTranslationProber implements Listener {
                 // Final cleanup: remove session after grace period for late packets
                 Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
                     ProbeSession s = activeSessions.remove(player.getUniqueId());
-                    if (s != null && !s.handled) {
+                    if (s != null && !s.handled.get()) {
                         if (Config.DEBUG.toBool()) {
                             Logs.logInfo("HackedServer | Sign probe final cleanup for " + player.getName());
                         }
@@ -284,7 +292,7 @@ public class SignTranslationProber implements Listener {
         UUID playerUUID = event.getUser().getUUID();
 
         ProbeSession session = activeSessions.get(playerUUID);
-        if (session == null || session.handled) {
+        if (session == null || session.handled.get()) {
             return;
         }
 
@@ -297,9 +305,11 @@ public class SignTranslationProber implements Listener {
             return;
         }
 
-        // Now consume the session
+        // Atomically claim the session to avoid race with timeout handler
+        if (!session.handled.compareAndSet(false, true)) {
+            return;
+        }
         activeSessions.remove(playerUUID);
-        session.handled = true;
 
         event.setCancelled(true);
 
@@ -360,8 +370,8 @@ public class SignTranslationProber implements Listener {
             if (session.originalBlockState() != null) {
                 session.originalBlockState().update(true, false);
             }
-        } catch (Throwable e) {
-            // Best effort
+        } catch (Exception e) {
+            Logs.logWarning("Failed to restore block after probe: " + e.getMessage());
         }
     }
 

@@ -141,7 +141,7 @@ public class HackedServerPlugin {
                 continue;
             }
             if (player.hasPermission("hackedserver.bypass")) {
-                return;
+                continue;
             }
 
             for (String command : action.getConsoleCommands()) {

@@ -153,7 +153,7 @@ public final class ForgeChannelParser {
 
         for (String channel : channels) {
             channel = channel.trim().toLowerCase(Locale.ROOT);
-            if (channel.startsWith("fabric-") || channel.startsWith("fabric:")) {
+            if (channel.startsWith("fabric-") || channel.startsWith("fabric:") || channel.startsWith("fabricloader")) {
                 return true;
             }
         }

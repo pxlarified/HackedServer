@@ -4,6 +4,7 @@ import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListenerAbstract;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
+import com.github.retrooper.packetevents.event.PacketSendEvent;
 import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
 import com.github.retrooper.packetevents.protocol.nbt.NBTByte;
 import com.github.retrooper.packetevents.protocol.nbt.NBTList;
@@ -17,6 +18,7 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientUp
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBlockChange;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBlockEntityData;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerOpenSignEditor;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerPlayerPositionAndLook;
 
 import org.hackedserver.core.HackedPlayer;
 import org.hackedserver.core.HackedServer;
@@ -52,13 +54,14 @@ import java.util.logging.Logger;
 public class PacketSignProber {
 
     private static final Logger LOGGER = Logger.getLogger("HackedServer");
-    private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "HackedServer-ProbeScheduler");
         t.setDaemon(true);
         return t;
     });
 
     private final Map<UUID, ProbeSession> activeSessions = new ConcurrentHashMap<>();
+    private final Map<UUID, Vector3i> playerPositions = new ConcurrentHashMap<>();
     private PacketListenerAbstract packetListener;
 
     /**
@@ -101,6 +104,25 @@ public class PacketSignProber {
                     handleUpdateSign(event);
                 }
             }
+
+            @Override
+            public void onPacketSend(PacketSendEvent event) {
+                if (event.getPacketType() == PacketType.Play.Server.PLAYER_POSITION_AND_LOOK) {
+                    try {
+                        WrapperPlayServerPlayerPositionAndLook posPacket =
+                                new WrapperPlayServerPlayerPositionAndLook(event);
+                        UUID uuid = event.getUser().getUUID();
+                        if (uuid != null) {
+                            playerPositions.put(uuid, new Vector3i(
+                                    (int) posPacket.getX(),
+                                    (int) posPacket.getY(),
+                                    (int) posPacket.getZ()));
+                        }
+                    } catch (Exception ignored) {
+                        // Best effort position tracking
+                    }
+                }
+            }
         };
         PacketEvents.getAPI().getEventManager().registerListener(packetListener);
     }
@@ -114,6 +136,8 @@ public class PacketSignProber {
             packetListener = null;
         }
         activeSessions.clear();
+        playerPositions.clear();
+        scheduler.shutdownNow();
     }
 
     /**
@@ -141,7 +165,7 @@ public class PacketSignProber {
         }
 
         long delayMs = ProbingConfig.getDelayTicks() * 50L; // Convert ticks to milliseconds
-        SCHEDULER.schedule(() -> {
+        scheduler.schedule(() -> {
             try {
                 doStartProbe(user, playerName, checks);
             } catch (Exception e) {
@@ -154,6 +178,7 @@ public class PacketSignProber {
      * Clean up any active probe session for a disconnecting player.
      */
     public void onPlayerDisconnect(UUID playerUUID) {
+        playerPositions.remove(playerUUID);
         ProbeSession session = activeSessions.remove(playerUUID);
         if (session != null && debugEnabled) {
             LOGGER.info("HackedServer | Cleaned up packet probe session for " + playerUUID + " (disconnect)");
@@ -164,10 +189,13 @@ public class PacketSignProber {
         List<TranslationCheck> lineChecks = checks.size() > 4 ? checks.subList(0, 4) : checks;
         UUID playerUUID = user.getUUID();
 
-        // Use a position far below the player (y = minWorldHeight) so the fake sign isn't visible.
-        // The position doesn't need to correspond to a real block - it's entirely client-side.
+        // Use the player's known position to ensure the sign is in a loaded chunk.
+        // Fall back to world origin if position is unknown (less reliable but still works near spawn).
         int minY = user.getMinWorldHeight();
-        Vector3i signPos = new Vector3i(0, minY, 0);
+        Vector3i knownPos = playerPositions.get(playerUUID);
+        int signX = knownPos != null ? knownPos.x : 0;
+        int signZ = knownPos != null ? knownPos.z : 0;
+        Vector3i signPos = new Vector3i(signX, minY, signZ);
 
         if (debugEnabled) {
             LOGGER.info("HackedServer | Starting packet sign probe for " + playerName
@@ -190,7 +218,7 @@ public class PacketSignProber {
         activeSessions.put(playerUUID, new ProbeSession(signPos, lineChecks));
 
         // 4. Send Open Sign Editor after a short delay to let the block update propagate
-        SCHEDULER.schedule(() -> {
+        scheduler.schedule(() -> {
             try {
                 if (!activeSessions.containsKey(playerUUID)) {
                     return; // Session was removed (player disconnected)
@@ -204,7 +232,7 @@ public class PacketSignProber {
                 }
 
                 // Timeout: remove session and clean up after 22 seconds (440 ticks)
-                SCHEDULER.schedule(() -> {
+                scheduler.schedule(() -> {
                     ProbeSession s = activeSessions.remove(playerUUID);
                     if (s != null && !s.handled) {
                         if (debugEnabled) {
@@ -314,8 +342,11 @@ public class PacketSignProber {
             return;
         }
 
-        // Now consume the session
-        activeSessions.remove(playerUUID);
+        // Atomically claim the session to avoid race with timeout handler
+        session = activeSessions.remove(playerUUID);
+        if (session == null || session.handled) {
+            return;
+        }
         session.handled = true;
 
         // Cancel the packet so the backend server doesn't try to process it

@@ -134,6 +134,9 @@ public class PacketEventsPayloadListener extends PacketListenerAbstract {
                     runForgeActions(result.getTriggers(), playerUuid, playerName);
                 }
             }
+
+            // Re-evaluate spoofing: brand arrived after register
+            checkBrandSpoofing(playerUuid, playerName, hackedPlayer);
         }
 
         // Detect mods from minecraft:register
@@ -146,19 +149,28 @@ public class PacketEventsPayloadListener extends PacketListenerAbstract {
                 }
             }
 
+            // Track fabric channels for deferred spoofing check
+            if (ForgeChannelParser.containsFabricChannels(message)) {
+                hackedPlayer.setFabricChannelsDetected(true);
+            }
+
             // Brand spoofing detection: vanilla brand + fabric channels = ServerSpoof
-            if (ForgeConfig.isSpoofingDetectionEnabled()
-                    && !hackedPlayer.hasGenericCheck("spoofed_brand")
-                    && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
-                    && ForgeChannelParser.containsFabricChannels(message)) {
-                hackedPlayer.addGenericCheck("spoofed_brand");
-                List<Action> actions = ForgeConfig.getSpoofingActions();
-                if (!actions.isEmpty()) {
-                    for (Action action : actions) {
-                        performActions(action, playerUuid, playerName, "Spoofed Brand (Fabric)",
-                                Placeholder.unparsed("player", playerName),
-                                Placeholder.parsed("name", "Spoofed Brand (Fabric)"));
-                    }
+            checkBrandSpoofing(playerUuid, playerName, hackedPlayer);
+        }
+    }
+
+    private void checkBrandSpoofing(UUID playerUuid, String playerName, HackedPlayer hackedPlayer) {
+        if (ForgeConfig.isSpoofingDetectionEnabled()
+                && !hackedPlayer.hasGenericCheck("spoofed_brand")
+                && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
+                && hackedPlayer.hasFabricChannelsDetected()) {
+            hackedPlayer.addGenericCheck("spoofed_brand");
+            List<Action> actions = ForgeConfig.getSpoofingActions();
+            if (!actions.isEmpty()) {
+                for (Action action : actions) {
+                    performActions(action, playerUuid, playerName, "Spoofed Brand (Fabric)",
+                            Placeholder.unparsed("player", playerName),
+                            Placeholder.parsed("name", "Spoofed Brand (Fabric)"));
                 }
             }
         }

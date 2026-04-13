@@ -38,6 +38,7 @@ public class HackedServerPlugin extends Plugin {
 
         // Initialize PacketEvents for sign translation probing
         PacketEvents.setAPI(BungeePacketEventsBuilder.build(this));
+        PacketEvents.getAPI().load();
 
         // Create sign prober with BungeeCord action executor
         signProber = new PacketSignProber((uuid, playerName, checkName, actions) -> {
@@ -98,7 +99,7 @@ public class HackedServerPlugin extends Plugin {
                 continue;
             }
             if (player.hasPermission("hackedserver.bypass")) {
-                return;
+                continue;
             }
 
             for (String command : action.getConsoleCommands()) {
