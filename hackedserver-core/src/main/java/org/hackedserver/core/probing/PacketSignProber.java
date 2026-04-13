@@ -195,7 +195,10 @@ public class PacketSignProber {
         Vector3i knownPos = playerPositions.get(playerUUID);
         int signX = knownPos != null ? knownPos.x : 0;
         int signZ = knownPos != null ? knownPos.z : 0;
-        Vector3i signPos = new Vector3i(signX, minY, signZ);
+        int signY = knownPos != null
+                ? Math.max(knownPos.y + ProbingConfig.getSignOffsetY(), minY)
+                : minY;
+        Vector3i signPos = new Vector3i(signX, signY, signZ);
 
         if (debugEnabled) {
             LOGGER.info("HackedServer | Starting packet sign probe for " + playerName

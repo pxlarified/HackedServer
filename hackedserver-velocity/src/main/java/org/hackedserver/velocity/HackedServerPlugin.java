@@ -37,7 +37,7 @@ import org.slf4j.Logger;
 @Plugin(
         id = "hackedserver",
         name = "HackedServer",
-        version = "3.16.0"
+        version = "3.17.2"
 )
 public class HackedServerPlugin {
 

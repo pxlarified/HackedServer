@@ -8,6 +8,7 @@ import org.hackedserver.core.HackedServer;
 import org.hackedserver.core.bedrock.BedrockDetector;
 import org.hackedserver.core.config.ConfigsManager;
 import org.hackedserver.core.config.Message;
+import org.hackedserver.spigot.commands.BukkitCommandFallback;
 import org.hackedserver.spigot.commands.CommandsManager;
 import org.hackedserver.spigot.hopper.HackedServerHopper;
 import org.hackedserver.spigot.listeners.HackedPlayerListeners;
@@ -149,14 +150,21 @@ public class HackedServerPlugin extends JavaPlugin {
             getLogger().warning("Sign translation probing requires PacketEvents - disabled");
         }
 
-        // Try to load commands with CommandAPI (may not be available on all server types)
+        // Try to load commands with CommandAPI, fall back to Bukkit commands if unavailable
+        boolean commandsRegistered = false;
         try {
             new CommandsManager(this, audiences).loadCommands();
+            commandsRegistered = true;
         } catch (LinkageError e) {
-            // Catches NoClassDefFoundError, IncompatibleClassChangeError, etc.
-            getLogger().warning("CommandAPI is not available - commands will not be registered.");
-            getLogger().warning("This is expected on non-Paper servers like Arclight/Mohist.");
-            getLogger().info("The plugin will function normally without command support.");
+            // CommandAPI not available - will use Bukkit fallback below
+        }
+        if (!commandsRegistered) {
+            BukkitCommandFallback fallback = new BukkitCommandFallback(this, audiences);
+            var cmd = getCommand("hackedserver");
+            if (cmd != null) {
+                cmd.setExecutor(fallback);
+                cmd.setTabCompleter(fallback);
+            }
         }
         Logs.logComponent(Message.PLUGIN_LOADED.toComponent());
 

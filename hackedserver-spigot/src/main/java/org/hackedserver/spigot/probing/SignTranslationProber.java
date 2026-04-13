@@ -279,7 +279,7 @@ public class SignTranslationProber implements Listener {
                 }, 440L); // 2 second grace period after timeout
             }, 5L);
 
-        } catch (Throwable e) {
+        } catch (Exception e) {
             Logs.logWarning("Failed to start translation probe: " + e.getMessage());
             ProbeSession s = activeSessions.remove(player.getUniqueId());
             if (s != null) restoreBlock(s);
