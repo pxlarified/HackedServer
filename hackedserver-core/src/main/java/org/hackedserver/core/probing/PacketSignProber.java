@@ -359,7 +359,9 @@ public class PacketSignProber {
         if (!session.handled.compareAndSet(false, true)) {
             return;
         }
-        activeSessions.remove(playerUUID);
+        if (!activeSessions.remove(playerUUID, session)) {
+            return;
+        }
 
         // Cancel the packet so the backend server doesn't try to process it
         event.setCancelled(true);

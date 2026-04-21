@@ -319,7 +319,9 @@ public class SignTranslationProber implements Listener {
         if (!session.handled.compareAndSet(false, true)) {
             return;
         }
-        activeSessions.remove(playerUUID);
+        if (!activeSessions.remove(playerUUID, session)) {
+            return;
+        }
 
         event.setCancelled(true);
 

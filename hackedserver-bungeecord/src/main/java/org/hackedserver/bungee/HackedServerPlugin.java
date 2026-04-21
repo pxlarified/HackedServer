@@ -45,22 +45,34 @@ public class HackedServerPlugin extends Plugin {
             return;
         }
 
-        PacketEvents.setAPI(BungeePacketEventsBuilder.build(this));
-        PacketEvents.getAPI().load();
-
-        // Create sign prober with BungeeCord action executor
-        signProber = new PacketSignProber((uuid, playerName, checkName, actions) -> {
-            executeProbeActions(uuid, playerName, checkName, actions);
-        });
+        try {
+            PacketEvents.setAPI(BungeePacketEventsBuilder.build(this));
+            PacketEvents.getAPI().load();
+        } catch (Throwable e) {
+            getLogger().severe("Failed to initialize PacketEvents. HackedServer will not function: " + e.getMessage());
+            return;
+        }
 
         PluginManager pluginManager = this.getProxy().getPluginManager();
-        pluginManager.registerListener(this, new HackedPlayerListeners(signProber));
         pluginManager.registerListener(this, new CustomPayloadListener());
         pluginManager.registerCommand(this, new CommandsManager(this.getProxy(), getDataFolder()));
         this.getProxy().registerChannel(LunarApolloHandshakeParser.CHANNEL);
 
-        signProber.register();
-        PacketEvents.getAPI().init();
+        try {
+            // Create sign prober with BungeeCord action executor
+            signProber = new PacketSignProber((uuid, playerName, checkName, actions) -> {
+                executeProbeActions(uuid, playerName, checkName, actions);
+            });
+            pluginManager.registerListener(this, new HackedPlayerListeners(signProber));
+            signProber.register();
+            PacketEvents.getAPI().init();
+        } catch (Throwable e) {
+            getLogger().severe("Failed to register PacketEvents listeners. HackedServer will not function: " + e.getMessage());
+            if (signProber != null) {
+                signProber.unregister();
+                signProber = null;
+            }
+        }
     }
 
     @Override

@@ -140,19 +140,26 @@ public class HackedServerPlugin extends JavaPlugin {
         // Register sign translation probing (active mod detection via packets)
         // Only register when PacketEvents is actually initialized (usePacketEvents or standalone plugin)
         // SignTranslationProber uses 1.20+ sign APIs (Side, SignSide, Player#openSign)
-        boolean packetEventsInitialized = usePacketEvents
-                || Bukkit.getPluginManager().getPlugin("packetevents") != null;
+        boolean packetEventsInitialized = packetEventsIntegration != null
+                && packetEventsIntegration.isReadyForListeners();
         if (packetEventsAvailable && packetEventsInitialized) {
             if (isSignApiAvailable()) {
-                signTranslationProber = new SignTranslationProber();
-                Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
-                signTranslationProber.register();
-                getLogger().info("Sign translation probing enabled (PacketEvents)");
+                try {
+                    signTranslationProber = new SignTranslationProber();
+                    Bukkit.getPluginManager().registerEvents(signTranslationProber, this);
+                    signTranslationProber.register();
+                    getLogger().info("Sign translation probing enabled (PacketEvents)");
+                } catch (Throwable e) {
+                    signTranslationProber = null;
+                    getLogger().warning("Failed to register sign translation probing: " + e.getMessage());
+                }
             } else {
                 getLogger().info("Sign translation probing requires 1.20+ server APIs - disabled on this version");
             }
         } else if (!packetEventsAvailable) {
             getLogger().warning("Sign translation probing requires PacketEvents - disabled");
+        } else {
+            getLogger().warning("Sign translation probing requires an initialized PacketEvents API - disabled");
         }
 
         // Try to load commands with CommandAPI, fall back to Bukkit commands if unavailable
