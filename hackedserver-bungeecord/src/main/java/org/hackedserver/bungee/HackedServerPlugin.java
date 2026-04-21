@@ -54,6 +54,7 @@ public class HackedServerPlugin extends Plugin {
         }
 
         PluginManager pluginManager = this.getProxy().getPluginManager();
+        pluginManager.registerListener(this, new HackedPlayerListeners(this::getSignProber));
         pluginManager.registerListener(this, new CustomPayloadListener());
         pluginManager.registerCommand(this, new CommandsManager(this.getProxy(), getDataFolder()));
         this.getProxy().registerChannel(LunarApolloHandshakeParser.CHANNEL);
@@ -63,7 +64,6 @@ public class HackedServerPlugin extends Plugin {
             signProber = new PacketSignProber((uuid, playerName, checkName, actions) -> {
                 executeProbeActions(uuid, playerName, checkName, actions);
             });
-            pluginManager.registerListener(this, new HackedPlayerListeners(signProber));
             signProber.register();
             PacketEvents.getAPI().init();
         } catch (Throwable e) {
@@ -88,6 +88,10 @@ public class HackedServerPlugin extends Plugin {
 
     public static HackedServerPlugin get() {
         return instance;
+    }
+
+    public PacketSignProber getSignProber() {
+        return signProber;
     }
 
     public BungeeAudiences getAudiences() {

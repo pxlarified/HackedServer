@@ -23,14 +23,15 @@ import org.hackedserver.core.probing.PacketSignProber;
 import org.hackedserver.core.utils.JoinWebhook;
 
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 public class HackedPlayerListeners implements Listener {
 
     private static final long JOIN_WEBHOOK_DELAY_SECONDS = 1L;
-    private final PacketSignProber signProber;
+    private final Supplier<PacketSignProber> signProberSupplier;
 
-    public HackedPlayerListeners(PacketSignProber signProber) {
-        this.signProber = signProber;
+    public HackedPlayerListeners(Supplier<PacketSignProber> signProberSupplier) {
+        this.signProberSupplier = signProberSupplier;
     }
 
     @EventHandler
@@ -53,16 +54,23 @@ public class HackedPlayerListeners implements Listener {
         handleBedrockDetection(player, hackedPlayer);
 
         // Start sign translation probe if enabled
+        PacketSignProber signProber = signProberSupplier.get();
         if (signProber != null && !player.hasPermission("hackedserver.bypass")) {
-            User user = PacketEvents.getAPI().getPlayerManager().getUser(player);
-            if (user != null) {
-                signProber.startProbe(user, player.getName());
+            try {
+                User user = PacketEvents.getAPI().getPlayerManager().getUser(player);
+                if (user != null) {
+                    signProber.startProbe(user, player.getName());
+                }
+            } catch (RuntimeException e) {
+                HackedServerPlugin.get().getLogger().warning("Failed to start sign translation probe for "
+                        + player.getName() + ": " + e.getMessage());
             }
         }
     }
 
     @EventHandler
     public void onPlayerLeave(PlayerDisconnectEvent event) {
+        PacketSignProber signProber = signProberSupplier.get();
         if (signProber != null) {
             signProber.onPlayerDisconnect(event.getPlayer().getUniqueId());
         }
