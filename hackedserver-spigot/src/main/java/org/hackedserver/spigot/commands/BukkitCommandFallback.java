@@ -17,6 +17,7 @@ import org.hackedserver.core.config.Message;
 import org.hackedserver.core.forge.ForgeConfig;
 import org.hackedserver.core.forge.ForgeModInfo;
 import org.hackedserver.core.lunar.LunarModInfo;
+import org.hackedserver.spigot.utils.HackedInventoryView;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -147,8 +148,9 @@ public class BukkitCommandFallback implements CommandExecutor, TabCompleter {
         playersWithChecks.forEach(hackedPlayer -> {
             Message.PLAYER_LIST_FORMAT.send(audiences.sender(sender),
                     Placeholder.parsed("player",
-                            java.util.Objects.requireNonNull(
-                                    Bukkit.getOfflinePlayer(hackedPlayer.getUuid()).getName())));
+                            java.util.Objects.requireNonNullElse(
+                                    Bukkit.getOfflinePlayer(hackedPlayer.getUuid()).getName(),
+                                    hackedPlayer.getUuid().toString())));
         });
     }
 
@@ -159,7 +161,7 @@ public class BukkitCommandFallback implements CommandExecutor, TabCompleter {
                     net.kyori.adventure.text.Component.text("This command can only be used by players."));
             return;
         }
-        CommandsManager.openInvPage(player, 0);
+        HackedInventoryView.openInvPage(player, 0);
     }
 
     @Override

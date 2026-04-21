@@ -25,6 +25,7 @@ import org.hackedserver.core.HackedServer;
 import org.hackedserver.core.config.Action;
 import org.hackedserver.core.config.Config;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 /**
@@ -79,11 +81,14 @@ public class PacketSignProber {
     private static final class ProbeSession {
         private final Vector3i signPosition;
         private final List<TranslationCheck> lineChecks;
-        private volatile boolean handled = false;
+        private final List<TranslationCheck> remainingChecks;
+        private final AtomicBoolean handled = new AtomicBoolean(false);
+        private volatile boolean timedOut = false;
 
-        ProbeSession(Vector3i signPosition, List<TranslationCheck> lineChecks) {
+        ProbeSession(Vector3i signPosition, List<TranslationCheck> lineChecks, List<TranslationCheck> remainingChecks) {
             this.signPosition = signPosition;
             this.lineChecks = lineChecks;
+            this.remainingChecks = remainingChecks;
         }
     }
 
@@ -114,9 +119,9 @@ public class PacketSignProber {
                         UUID uuid = event.getUser().getUUID();
                         if (uuid != null) {
                             playerPositions.put(uuid, new Vector3i(
-                                    (int) posPacket.getX(),
-                                    (int) posPacket.getY(),
-                                    (int) posPacket.getZ()));
+                                    floorBlock(posPacket.getX()),
+                                    floorBlock(posPacket.getY()),
+                                    floorBlock(posPacket.getZ())));
                         }
                     } catch (Exception ignored) {
                         // Best effort position tracking
@@ -186,7 +191,10 @@ public class PacketSignProber {
     }
 
     private void doStartProbe(User user, String playerName, List<TranslationCheck> checks) {
-        List<TranslationCheck> lineChecks = checks.size() > 4 ? checks.subList(0, 4) : checks;
+        List<TranslationCheck> lineChecks = new ArrayList<>(checks.subList(0, Math.min(4, checks.size())));
+        List<TranslationCheck> remainingChecks = checks.size() > 4
+                ? new ArrayList<>(checks.subList(4, checks.size()))
+                : List.of();
         UUID playerUUID = user.getUUID();
 
         // Use the player's known position to ensure the sign is in a loaded chunk.
@@ -218,7 +226,7 @@ public class PacketSignProber {
         user.sendPacket(blockEntityData);
 
         // 3. Register the probe session BEFORE opening the sign editor
-        activeSessions.put(playerUUID, new ProbeSession(signPos, lineChecks));
+        activeSessions.put(playerUUID, new ProbeSession(signPos, lineChecks, remainingChecks));
 
         // 4. Send Open Sign Editor after a short delay to let the block update propagate
         scheduler.schedule(() -> {
@@ -234,23 +242,25 @@ public class PacketSignProber {
                     LOGGER.info("HackedServer | Opened sign editor via packet for " + playerName);
                 }
 
-                // Timeout: remove session and clean up after 22 seconds (440 ticks)
+                // Timeout: clean up the virtual block but keep the session briefly to consume late UPDATE_SIGN packets.
                 scheduler.schedule(() -> {
-                    ProbeSession s = activeSessions.remove(playerUUID);
-                    if (s != null && !s.handled) {
+                    ProbeSession s = activeSessions.get(playerUUID);
+                    if (s != null && !s.handled.get()) {
+                        s.timedOut = true;
                         if (debugEnabled) {
-                            LOGGER.info("HackedServer | Packet sign probe timed out for " + playerName);
+                            LOGGER.info("HackedServer | Packet sign probe timed out for " + playerName
+                                    + " (waiting for late packet)");
                         }
-                        // Restore the block to air (client-side only)
-                        try {
-                            WrappedBlockState airState = WrappedBlockState.getByString(
-                                    user.getClientVersion(), "minecraft:air");
-                            user.sendPacket(new WrapperPlayServerBlockChange(signPos, airState));
-                        } catch (Exception ignored) {
-                            // Best effort - player may have disconnected
-                        }
+                        restoreVirtualBlock(user, signPos);
                     }
                 }, 22000, TimeUnit.MILLISECONDS);
+
+                scheduler.schedule(() -> {
+                    ProbeSession s = activeSessions.remove(playerUUID);
+                    if (s != null && !s.handled.get()) {
+                        continueProbeIfNeeded(user, playerName, s);
+                    }
+                }, 24000, TimeUnit.MILLISECONDS);
 
             } catch (Exception e) {
                 activeSessions.remove(playerUUID);
@@ -335,7 +345,7 @@ public class PacketSignProber {
         UUID playerUUID = event.getUser().getUUID();
 
         ProbeSession session = activeSessions.get(playerUUID);
-        if (session == null || session.handled) {
+        if (session == null || session.handled.get()) {
             return;
         }
 
@@ -346,11 +356,10 @@ public class PacketSignProber {
         }
 
         // Atomically claim the session to avoid race with timeout handler
-        session = activeSessions.remove(playerUUID);
-        if (session == null || session.handled) {
+        if (!session.handled.compareAndSet(false, true)) {
             return;
         }
-        session.handled = true;
+        activeSessions.remove(playerUUID);
 
         // Cancel the packet so the backend server doesn't try to process it
         event.setCancelled(true);
@@ -363,13 +372,8 @@ public class PacketSignProber {
                     + ": [\"" + String.join("\", \"", lines) + "\"]");
         }
 
-        // Restore the block to air (client-side only)
-        try {
-            WrappedBlockState airState = WrappedBlockState.getByString(
-                    user.getClientVersion(), "minecraft:air");
-            user.sendPacket(new WrapperPlayServerBlockChange(session.signPosition, airState));
-        } catch (Exception ignored) {
-            // Best effort
+        if (!session.timedOut) {
+            restoreVirtualBlock(user, session.signPosition);
         }
 
         // Process the response
@@ -400,6 +404,28 @@ public class PacketSignProber {
                 }
             }
         }
+
+        continueProbeIfNeeded(user, user.getName(), session);
+    }
+
+    private void continueProbeIfNeeded(User user, String playerName, ProbeSession session) {
+        if (!session.remainingChecks.isEmpty()) {
+            doStartProbe(user, playerName, session.remainingChecks);
+        }
+    }
+
+    private void restoreVirtualBlock(User user, Vector3i signPosition) {
+        try {
+            WrappedBlockState airState = WrappedBlockState.getByString(
+                    user.getClientVersion(), "minecraft:air");
+            user.sendPacket(new WrapperPlayServerBlockChange(signPosition, airState));
+        } catch (Exception ignored) {
+            // Best effort
+        }
+    }
+
+    private static int floorBlock(double coordinate) {
+        return (int) Math.floor(coordinate);
     }
 
     private static String escapeJson(String s) {

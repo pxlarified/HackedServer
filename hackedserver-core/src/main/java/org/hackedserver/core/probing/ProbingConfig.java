@@ -43,7 +43,7 @@ public final class ProbingConfig {
         if (settings != null) {
             Long delay = settings.getLong("delay_ticks");
             if (delay != null) {
-                delayTicks = delay;
+                delayTicks = Math.max(1L, delay);
             }
             Long offset = settings.getLong("sign_offset_y");
             if (offset != null) {

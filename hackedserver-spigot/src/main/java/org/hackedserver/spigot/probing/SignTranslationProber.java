@@ -32,6 +32,7 @@ import org.hackedserver.spigot.HackedServerPlugin;
 import org.hackedserver.spigot.listeners.PayloadProcessor;
 import org.hackedserver.spigot.utils.logs.Logs;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -63,20 +64,25 @@ public class SignTranslationProber implements Listener {
         private final BlockData originalBlockData;
         private final BlockState originalBlockState;
         private final List<TranslationCheck> lineChecks;
+        private final List<TranslationCheck> remainingChecks;
         private volatile boolean timedOut = false;
         private final AtomicBoolean handled = new AtomicBoolean(false);
+        private final AtomicBoolean restored = new AtomicBoolean(false);
 
-        ProbeSession(Location signLocation, BlockData originalBlockData, BlockState originalBlockState, List<TranslationCheck> lineChecks) {
+        ProbeSession(Location signLocation, BlockData originalBlockData, BlockState originalBlockState,
+                     List<TranslationCheck> lineChecks, List<TranslationCheck> remainingChecks) {
             this.signLocation = signLocation;
             this.originalBlockData = originalBlockData;
             this.originalBlockState = originalBlockState;
             this.lineChecks = lineChecks;
+            this.remainingChecks = remainingChecks;
         }
 
         Location signLocation() { return signLocation; }
         BlockData originalBlockData() { return originalBlockData; }
         BlockState originalBlockState() { return originalBlockState; }
         List<TranslationCheck> lineChecks() { return lineChecks; }
+        List<TranslationCheck> remainingChecks() { return remainingChecks; }
     }
 
     public void register() {
@@ -166,7 +172,10 @@ public class SignTranslationProber implements Listener {
     }
 
     private void startProbe(Player player, List<TranslationCheck> checks) {
-        List<TranslationCheck> lineChecks = checks.size() > 4 ? checks.subList(0, 4) : checks;
+        List<TranslationCheck> lineChecks = new ArrayList<>(checks.subList(0, Math.min(4, checks.size())));
+        List<TranslationCheck> remainingChecks = checks.size() > 4
+                ? new ArrayList<>(checks.subList(4, checks.size()))
+                : List.of();
 
         Location playerLoc = player.getLocation();
         int signX = playerLoc.getBlockX();
@@ -231,7 +240,7 @@ public class SignTranslationProber implements Listener {
 
             // Register the probe session
             activeSessions.put(player.getUniqueId(),
-                    new ProbeSession(signLoc, originalData, originalState, lineChecks));
+                    new ProbeSession(signLoc, originalData, originalState, lineChecks, remainingChecks));
 
             // Open sign editor after a short delay to let the block update propagate
             Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
@@ -275,6 +284,7 @@ public class SignTranslationProber implements Listener {
                             Logs.logInfo("HackedServer | Sign probe final cleanup for " + player.getName());
                         }
                         restoreBlock(s);
+                        scheduleRemainingChecks(player, s);
                     }
                 }, 440L); // 2 second grace period after timeout
             }, 5L);
@@ -359,10 +369,15 @@ public class SignTranslationProber implements Listener {
                     }
                 }
             }
+
+            scheduleRemainingChecks(onlinePlayer, session);
         });
     }
 
     private void restoreBlock(ProbeSession session) {
+        if (!session.restored.compareAndSet(false, true)) {
+            return;
+        }
         try {
             Block block = session.signLocation().getBlock();
             block.setBlockData(session.originalBlockData(), false);
@@ -373,6 +388,17 @@ public class SignTranslationProber implements Listener {
         } catch (Exception e) {
             Logs.logWarning("Failed to restore block after probe: " + e.getMessage());
         }
+    }
+
+    private void scheduleRemainingChecks(Player player, ProbeSession session) {
+        if (session.remainingChecks().isEmpty() || !player.isOnline()) {
+            return;
+        }
+        Bukkit.getScheduler().runTaskLater(HackedServerPlugin.get(), () -> {
+            if (player.isOnline()) {
+                startProbe(player, session.remainingChecks());
+            }
+        }, 5L);
     }
 
 }
