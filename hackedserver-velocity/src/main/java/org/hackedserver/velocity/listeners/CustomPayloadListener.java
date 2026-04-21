@@ -23,6 +23,7 @@ import org.hackedserver.core.forge.ForgeConfig;
 import org.hackedserver.core.forge.ForgeHandshakeProcessor;
 import org.hackedserver.core.forge.ForgeHandshakeResult;
 import org.hackedserver.core.forge.ForgeModInfo;
+import org.hackedserver.core.forge.ForgeSpoofingDetector;
 import org.hackedserver.core.lunar.LunarActionTrigger;
 import org.hackedserver.core.lunar.LunarApolloHandshakeParser;
 import org.hackedserver.core.lunar.LunarHandshakeProcessor;
@@ -143,14 +144,10 @@ public class CustomPayloadListener implements PacketListener {
     }
 
     private void checkBrandSpoofing(Player player, HackedPlayer hackedPlayer) {
-        if (ForgeConfig.isSpoofingDetectionEnabled()
-                && !hackedPlayer.hasGenericCheck("spoofed_brand")
-                && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
-                && hackedPlayer.hasFabricChannelsDetected()) {
-            hackedPlayer.addGenericCheck("spoofed_brand");
+        if (ForgeSpoofingDetector.detect(hackedPlayer)) {
             List<Action> actions = ForgeConfig.getSpoofingActions();
             if (!actions.isEmpty()) {
-                runActions(actions, player.getUniqueId(), player.getUsername(), "Spoofed Brand (Fabric)");
+                runActions(actions, player.getUniqueId(), player.getUsername(), ForgeSpoofingDetector.CHECK_NAME);
             }
         }
     }

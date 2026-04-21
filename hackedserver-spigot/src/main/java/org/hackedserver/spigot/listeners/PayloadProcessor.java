@@ -17,6 +17,7 @@ import org.hackedserver.core.forge.ForgeConfig;
 import org.hackedserver.core.forge.ForgeHandshakeProcessor;
 import org.hackedserver.core.forge.ForgeHandshakeResult;
 import org.hackedserver.core.forge.ForgeModInfo;
+import org.hackedserver.core.forge.ForgeSpoofingDetector;
 import org.hackedserver.spigot.HackedServerPlugin;
 import org.hackedserver.spigot.utils.logs.Logs;
 
@@ -127,14 +128,10 @@ public final class PayloadProcessor {
     }
 
     private static void checkBrandSpoofing(Player player, HackedPlayer hackedPlayer) {
-        if (ForgeConfig.isSpoofingDetectionEnabled()
-                && !hackedPlayer.hasGenericCheck("spoofed_brand")
-                && ForgeChannelParser.isVanillaBrand(hackedPlayer.getBrand())
-                && hackedPlayer.hasFabricChannelsDetected()) {
-            hackedPlayer.addGenericCheck("spoofed_brand");
+        if (ForgeSpoofingDetector.detect(hackedPlayer)) {
             List<Action> actions = ForgeConfig.getSpoofingActions();
             if (!actions.isEmpty()) {
-                runActions(player, "Spoofed Brand (Fabric)", actions);
+                runActions(player, ForgeSpoofingDetector.CHECK_NAME, actions);
             }
         }
     }
